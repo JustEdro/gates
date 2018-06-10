@@ -24,11 +24,13 @@ uint8_t l1State, l2State, l3State;
 
 
 
-typedef enum {STATE_IDLE, STATE_OPENING_COMMAND, STATE_CLOSING_COMMAND} state;
+typedef enum {STATE_IDLE, STATE_OPENING_COMMAND, STATE_CLOSING_COMMAND} remoteState;
 
 
 unsigned long stateStartTime;
-state currentState = STATE_IDLE;
+unsigned long lastPingTime;
+
+remoteState currentState = STATE_IDLE;
 
 int counter = 0;
 
@@ -36,8 +38,8 @@ RequestPackage request;
 ResponsePackage resp;
 
 
-void debugLed (uint8_t led, uint8_t state) {
-  if (state == LOW) {
+void debugLed (uint8_t led, uint8_t remoteState) {
+  if (remoteState == LOW) {
     Serial.print("Led pin ");
     Serial.print(led, DEC);
     Serial.print(" switched to LOW");
@@ -49,7 +51,7 @@ void debugLed (uint8_t led, uint8_t state) {
   Serial.println(" ");
 }
 
-// updates state and performs digitalWrite if needed
+// updates remoteState and performs digitalWrite if needed
 void setLedStates(uint8_t l1, uint8_t l2, uint8_t l3){
   if (l1State != l1) {
     l1State = l1;
@@ -71,9 +73,15 @@ void setLedStates(uint8_t l1, uint8_t l2, uint8_t l3){
 
 
 
-void switchState(state newState){
+void switchState(remoteState newState){
   currentState = newState;
   stateStartTime = millis(); //
+}
+
+
+
+void logPingAnswer(){
+  lastPingTime = millis();
 }
 
 
@@ -112,11 +120,11 @@ void sendCommand(command com) {
 }
 
 
-
-
 bool initComplete = false;
 
 void setup()   {
+  lastPingTime = 0;
+
   Serial.begin(9600);
   Serial.println("System started (REMOTE)");
 
@@ -171,7 +179,7 @@ void setup()   {
   l2State = LOW;
   l3State = LOW;
 
-  setLedStates(LOW, LOW, LOW);
+  setLedStates(HIGH, LOW, LOW);
 
   if (! initComplete)
     setLedStates(LOW, LOW, HIGH);
@@ -187,7 +195,7 @@ void loop() {
 
   switch(currentState){
     case STATE_IDLE:
-      setLedStates(LOW, LOW, LOW);
+      setLedStates(HIGH, LOW, LOW);
 
       if (btnA == LOW){
         Serial.println("Changing to STATE_OPENING_COMMAND");
@@ -205,11 +213,11 @@ void loop() {
       break;
 
     case STATE_OPENING_COMMAND:
-      setLedStates(HIGH, LOW, LOW);
+      setLedStates(LOW, HIGH, LOW);
 
       // fall back to STATE_IDLE
       if ( millis() - stateStartTime >= OPENING_MAX_DURATION ){
-        Serial.println("Changing to STATE_IDLE state by timer");
+        Serial.println("Changing to STATE_IDLE remoteState by timer");
         switchState(STATE_IDLE);
       }
       break;
@@ -219,7 +227,7 @@ void loop() {
 
       // fall back to STATE_IDLE
       if ( millis() - stateStartTime >= CLOSING_MAX_DURATION ){
-        Serial.println("Changing to STATE_IDLE state by timer");
+        Serial.println("Changing to STATE_IDLE remoteState by timer");
         switchState(STATE_IDLE);
       }
       break;

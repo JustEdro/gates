@@ -10,45 +10,61 @@
 #define PIN_K3 4
 #define PIN_K4 5
 
-//  state machine delays
-#define ARMED_MAX_DURATION   10000
-#define OPENING_MAX_DURATION 4000
-#define CLOSING_MAX_DURATION 3000
+#define PIN_BTN_A 6
+#define PIN_BTN_B 7
 
+//  baseState machine delays
+#define ARMED_DURATION   10000
+#define OPENING_DURATION 20000
+#define CLOSING_DURATION 15000
+#define BUTTON_COOLDOWN_TIME 1000
 
 RF24 radio(9,10);
 
 
-typedef enum {STATE_IDLE, STATE_WAKEUP, STATE_ARMED, STATE_OPENING, STATE_CLOSING} state;
-
+typedef enum {STATE_IDLE, STATE_WAKEUP, STATE_ARMED, STATE_OPENING, STATE_CLOSING} baseState;
+typedef enum {BUTTON_STATE_NONE, BUTTON_STATE_OPEN, BUTTON_STATE_CLOSE} buttonStates;
 
 int counter = 1;
 int failCounter = 0;
-//byte data[32];
+//byte reqest[32];
 
+unsigned long gateRelayStateStartTime;
+baseState gateRelayState = STATE_IDLE;
 
-unsigned long stateStartTime;
-state currentState = STATE_IDLE;
+unsigned long buttonStateStartTime;
+buttonStates buttonState = BUTTON_STATE_NONE;
+
 uint8_t k1State, k2State, k3State, k4State;
 
-RequestPackage data;
+RequestPackage reqest;
 ResponsePackage resp;
 uint8_t commandCounter = 0;
 
 
-void resetTimer(){
-  stateStartTime = millis(); //
+void resetRelayTimer(){
+  gateRelayStateStartTime = millis(); //
 }
 
 
-
-void switchState(state newState){
-  currentState = newState;
-  resetTimer();
+void resetButtonTimer(){
+  buttonStateStartTime = millis(); //
 }
 
 
-// updates state and performs digitalWrite if needed
+void switchRelayState(baseState newState){
+  gateRelayState = newState;
+  resetRelayTimer();
+}
+
+
+void switchButtonState(buttonStates newState){
+  buttonState = newState;
+  resetButtonTimer();
+}
+
+
+// updates baseState and performs digitalWrite if needed
 void setRelayStates(uint8_t k1, uint8_t k2, uint8_t k3, uint8_t k4){
   if (k1State != k1) {
     k1State = k1;
@@ -93,7 +109,7 @@ void setup(){
     radio.setAutoAck(1);         //режим подтверждения приёма, 1 вкл 0 выкл
     radio.setRetries(2,15);     //(время между попыткой достучаться, число попыток)
 
-    radio.setPayloadSize(sizeof(data));     //размер пакета, в байтах
+    radio.setPayloadSize(sizeof(reqest));     //размер пакета, в байтах
     radio.setChannel(0x60);  // выбираем канал (в котором нет шумов!)
     radio.setCRCLength(RF24_CRC_16);   // RF24_CRC_8, RF24_CRC_16
     radio.setPALevel (RF24_PA_MAX);   // RF24_PA_MIN, RF24_PA_LOW, RF24_PA_HIGH, RF24_PA_MAX
@@ -122,44 +138,82 @@ void setup(){
   pinMode(PIN_K3, OUTPUT);
   pinMode(PIN_K4, OUTPUT);
 
+  // btns
+  pinMode(PIN_BTN_A, INPUT_PULLUP);
+  pinMode(PIN_BTN_B, INPUT_PULLUP);
+
   setRelayStates(HIGH, HIGH, HIGH, HIGH);
 }
 
 
 void loop() {
+  // buttons read
+  uint8_t btnUp, btnDown;
+  btnUp = digitalRead(PIN_BTN_A);
+  btnDown = digitalRead(PIN_BTN_B);
+
+  bool btnDownPressed = false;
+  bool btnUpPressed = false;
+
+  // buttons state machine
+  switch(buttonState){
+    case BUTTON_STATE_NONE:
+      if (btnUp == LOW){
+        Serial.println("Changing to BUTTON_STATE_OPEN");
+        switchButtonState(BUTTON_STATE_OPEN);
+        btnUpPressed = true;
+
+      } else if (btnDown == LOW){
+        Serial.println("Changing to BUTTON_STATE_CLOSE");
+        switchButtonState(BUTTON_STATE_CLOSE);
+        btnDownPressed = true;
+      } 
+
+      break;
+
+    case BUTTON_STATE_CLOSE:
+    case BUTTON_STATE_OPEN:
+      // fall back to IDLE
+      if ( millis() - buttonStateStartTime >= BUTTON_COOLDOWN_TIME ){
+        Serial.println("Changing to BUTTON_STATE_NONE by timer");
+        switchButtonState(BUTTON_STATE_NONE);
+      }
+
+      break;
+  }
+
+  // radio read
   bool dataRead = false;
   byte pipeNo;
 
   if ( radio.available(&pipeNo) ) {
+    radio.read(&reqest, sizeof(reqest));
 
-    radio.read(&data, sizeof(data));
-
-    Serial.println("Got command: " + data.commandText());
-    dataRead = true;
+    Serial.println("Got command: " + reqest.commandText());
 
     commandCounter++;
     resp.counter = commandCounter;
+    dataRead = true;
+  } else {
+    reqest.com = COMMAND_NOOP;
   }
 
 
-  // state machine
-  switch(currentState){
+  // relays state machine
+  switch(gateRelayState){
     case STATE_IDLE:
       setRelayStates(HIGH, HIGH, HIGH, HIGH);
 
-      if (dataRead && data.com == COMMAND_OPEN){
+      if (btnUpPressed || reqest.com == COMMAND_OPEN){
         Serial.println("Changing to STATE_OPENING");
-        switchState(STATE_OPENING);
-      }
+        switchRelayState(STATE_OPENING);
 
-      if (dataRead && data.com == COMMAND_CLOSE){
+      } else if (btnDownPressed || reqest.com == COMMAND_CLOSE){
         Serial.println("Changing to STATE_CLOSING");
-        switchState(STATE_CLOSING);
-      }
+        switchRelayState(STATE_CLOSING);
 
-      if (dataRead && data.com == COMMAND_PING){
+      } else if (reqest.com == COMMAND_PING){
         Serial.println("Pong");
-        
       }
 
       resp.resp = RESPONSE_OK;
@@ -170,9 +224,14 @@ void loop() {
       setRelayStates(LOW, HIGH, HIGH, HIGH);
 
       // fall back to IDLE
-      if ( millis() - stateStartTime >= OPENING_MAX_DURATION ){
+      if ( millis() - gateRelayStateStartTime >= OPENING_DURATION ){
         Serial.println("Changing to STATE_IDLE by timer");
-        switchState(STATE_IDLE);
+        switchRelayState(STATE_IDLE);
+      }
+
+      if ( btnUpPressed || btnDownPressed || reqest.com == COMMAND_OPEN || reqest.com == COMMAND_CLOSE ){
+        Serial.println("Changing to STATE_IDLE by button press");
+        switchRelayState(STATE_IDLE);
       }
 
       break;
@@ -182,10 +241,16 @@ void loop() {
       setRelayStates(HIGH, LOW, HIGH, HIGH);
 
       // fall back to IDLE
-      if ( millis() - stateStartTime >= CLOSING_MAX_DURATION ){
+      if ( millis() - gateRelayStateStartTime >= CLOSING_DURATION ){
         Serial.println("Changing to STATE_IDLE by timer");
-        switchState(STATE_IDLE);
+        switchRelayState(STATE_IDLE);
       }
+
+      if ( btnUpPressed || btnDownPressed || reqest.com == COMMAND_OPEN || reqest.com == COMMAND_CLOSE ){
+        Serial.println("Changing to STATE_IDLE by button press");
+        switchRelayState(STATE_IDLE);
+      }
+
       break;
 
     default:

@@ -8,6 +8,7 @@
 typedef enum {COMMAND_NOOP = 0, COMMAND_OPEN = 1, COMMAND_CLOSE = 2, COMMAND_PING = 3} command;
 typedef enum {RESPONSE_OK = 0, RESPONSE_BUSY = 1, RESPONSE_ERROR = 2} response;
 
+
 #define REQUEST_PACKAGE_PAYLOAD_SIZE 16
 #define RESPONSE_PACKAGE_PAYLOAD_SIZE 4
 
@@ -68,7 +69,6 @@ struct ResponsePackage {
 
 
 const uint64_t addressess[2] = { 0xABCDABCD71LL, 0x544d52687CLL };   // 1 - read, 2 - write on reading state
-
 
 
 void switchToRead (RF24& radio){
